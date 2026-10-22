@@ -21,7 +21,13 @@ import {
   Info,
   Clock,
   LogOut,
+  Globe,
+  BookOpen,
+  TrendingUp,
 } from 'lucide-react';
+import ContentSourcesTab from '@/components/ContentSourcesTab';
+import QuestionReviewTab from '@/components/QuestionReviewTab';
+import QADashboardTab from '@/components/QADashboardTab';
 
 interface ProviderConfig {
   provider: 'OPENAI' | 'GEMINI';
@@ -88,9 +94,9 @@ interface PromptVersion {
 
 export default function AdminPage() {
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState<'providers' | 'scoring' | 'prompts' | 'monitoring'>(
-    'providers'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'sources' | 'review' | 'qa_dashboard' | 'providers' | 'scoring' | 'prompts' | 'monitoring'
+  >('sources');
   const [loading, setLoading] = useState(true);
   const [adminChecked, setAdminChecked] = useState(false);
 
@@ -453,6 +459,42 @@ export default function AdminPage() {
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
         <button
+          onClick={() => setActiveTab('sources')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition ${
+            activeTab === 'sources'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Globe className="w-4 h-4" />
+          <span>Content Sources</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('review')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition ${
+            activeTab === 'review'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Q&A Review & Bank</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('qa_dashboard')}
+          className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition ${
+            activeTab === 'qa_dashboard'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4" />
+          <span>Collection Dashboard</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('providers')}
           className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-semibold flex items-center space-x-2 transition ${
             activeTab === 'providers'
@@ -500,6 +542,15 @@ export default function AdminPage() {
           <span>Health & Usage Logs</span>
         </button>
       </div>
+
+      {/* PHASE 2: CONTENT SOURCES TAB */}
+      {activeTab === 'sources' && <ContentSourcesTab />}
+
+      {/* PHASE 2: Q&A REVIEW & BANK TAB */}
+      {activeTab === 'review' && <QuestionReviewTab />}
+
+      {/* PHASE 2: Q&A COLLECTION DASHBOARD TAB */}
+      {activeTab === 'qa_dashboard' && <QADashboardTab />}
 
       {/* TAB 1: AI PROVIDERS & CREDENTIALS */}
       {activeTab === 'providers' && (
