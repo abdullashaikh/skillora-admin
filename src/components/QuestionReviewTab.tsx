@@ -77,6 +77,7 @@ export default function QuestionReviewTab() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalStagedCount, setTotalStagedCount] = useState(0);
 
   // Bulk Selection
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
@@ -129,6 +130,7 @@ export default function QuestionReviewTab() {
       const data = await parseApiResponse<{ items: StagedItem[]; pagination: any }>(res);
       setStagedItems(data.items || []);
       setTotalPages(data.pagination?.totalPages || 1);
+      setTotalStagedCount(data.pagination?.totalCount || 0);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to fetch staged items';
       setMessage({ text: msg, type: 'error' });
@@ -251,6 +253,33 @@ export default function QuestionReviewTab() {
       loadStagedItems();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Bulk reject failed';
+      setMessage({ text: msg, type: 'error' });
+    } finally {
+      setActionLoading((prev) => ({ ...prev, bulk: false }));
+    }
+  };
+
+  const handlePublishAllPending = async () => {
+    if (!window.confirm('Are you sure you want to approve and publish all pending questions matching current filters to the Question Bank?')) return;
+    setActionLoading((prev) => ({ ...prev, bulk: true }));
+    try {
+      const res = await apiFetch('/admin/questions/staged/publish-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          batchId: selectedBatch || undefined,
+          technologyId: selectedTech || undefined,
+        }),
+      });
+      const data = await parseApiResponse<{ result: { publishedCount: number } }>(res);
+      setMessage({
+        text: `Successfully published ${data.result?.publishedCount || 0} questions to the Question Bank under canonical technology!`,
+        type: 'success',
+      });
+      loadStagedItems();
+      loadBatches();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Publish all failed';
       setMessage({ text: msg, type: 'error' });
     } finally {
       setActionLoading((prev) => ({ ...prev, bulk: false }));
@@ -561,6 +590,18 @@ export default function QuestionReviewTab() {
               <Send className="w-3.5 h-3.5" />
               <span>Publish Selected</span>
             </button>
+
+            {totalStagedCount > 0 && (
+              <button
+                onClick={handlePublishAllPending}
+                disabled={actionLoading.bulk}
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-lg disabled:opacity-40 transition flex items-center space-x-1 shadow-xs"
+                title="Publish all pending items matching current filters directly to the Question Bank"
+              >
+                <CheckCircle className={`w-3.5 h-3.5 ${actionLoading.bulk ? 'animate-spin' : ''}`} />
+                <span>Publish All Pending ({totalStagedCount})</span>
+              </button>
+            )}
 
             <button
               onClick={handleBulkReject}

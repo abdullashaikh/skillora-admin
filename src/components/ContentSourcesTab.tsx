@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { apiFetch, parseApiResponse } from '@/lib/api';
 import {
   Globe,
@@ -20,6 +20,9 @@ import {
   Trash2,
   Calendar,
   Layers,
+  Search,
+  X,
+  Check,
 } from 'lucide-react';
 
 interface Technology {
@@ -50,6 +53,7 @@ interface ContentSource {
   lastError: string | null;
   technologies: Array<{ skill: Technology }>;
   _count?: { questions: number; documents: number };
+  stagedCount?: number;
 }
 
 interface BatchRecord {
@@ -74,7 +78,13 @@ export default function ContentSourcesTab() {
 
   // Modals state
   const [showAddModal, setShowAddModal] = useState(false);
-  const [previewData, setPreviewData] = useState<{ sourceName: string; questions: any[] } | null>(null);
+  const [previewData, setPreviewData] = useState<{
+    sourceName: string;
+    sourceId?: string;
+    questions: any[];
+    totalQuestionsFound?: number;
+    isExistingData?: boolean;
+  } | null>(null);
   const [historyBatches, setHistoryBatches] = useState<{ sourceName: string; batches: BatchRecord[] } | null>(null);
 
   // Add source form state
@@ -111,6 +121,59 @@ export default function ContentSourcesTab() {
   const [submitting, setSubmitting] = useState(false);
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  // Searchable Multi-Select Technologies state
+  const [techSearch, setTechSearch] = useState('');
+  const [techDropdownOpen, setTechDropdownOpen] = useState(false);
+  const [creatingTech, setCreatingTech] = useState(false);
+  const techDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (techDropdownRef.current && !techDropdownRef.current.contains(event.target as Node)) {
+        setTechDropdownOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const filteredTechnologies = technologies.filter((tech) =>
+    tech.canonicalName.toLowerCase().includes(techSearch.toLowerCase().trim())
+  );
+
+  const handleAddNewTech = async (techName: string) => {
+    const trimmed = techName.trim();
+    if (!trimmed) return;
+    setCreatingTech(true);
+    try {
+      const res = await apiFetch('/admin/technologies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ canonicalName: trimmed, category: 'General' }),
+      });
+      const data = await parseApiResponse<{ tech: Technology }>(res);
+      if (data.tech) {
+        setTechnologies((prev) => {
+          if (prev.some((t) => t.id === data.tech.id)) return prev;
+          return [...prev, data.tech].sort((a, b) => a.canonicalName.localeCompare(b.canonicalName));
+        });
+        setFormData((prev) => ({
+          ...prev,
+          selectedTechIds: prev.selectedTechIds.includes(data.tech.id)
+            ? prev.selectedTechIds
+            : [...prev.selectedTechIds, data.tech.id],
+        }));
+        setTechSearch('');
+        setMessage({ text: `Added and selected new technology "${data.tech.canonicalName}"`, type: 'success' });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Failed to add technology';
+      setMessage({ text: msg, type: 'error' });
+    } finally {
+      setCreatingTech(false);
+    }
+  };
 
   const loadSources = async () => {
     setLoading(true);
@@ -262,16 +325,45 @@ export default function ContentSourcesTab() {
       const res = await apiFetch(`/admin/content-sources/${source.id}/preview`, {
         method: 'POST',
       });
-      const data = await parseApiResponse(res);
+      const data = await parseApiResponse<{
+        questions: any[];
+        totalQuestionsFound?: number;
+        isExistingData?: boolean;
+      }>(res);
       setPreviewData({
         sourceName: source.name,
+        sourceId: source.id,
         questions: data.questions || [],
+        totalQuestionsFound: data.totalQuestionsFound || data.questions?.length || 0,
+        isExistingData: data.isExistingData || false,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Preview failed';
       setMessage({ text: msg, type: 'error' });
     } finally {
       setActionLoading((prev) => ({ ...prev, [`prev_${source.id}`]: false }));
+    }
+  };
+
+  const handlePublishAllSource = async (source: ContentSource) => {
+    setActionLoading((prev) => ({ ...prev, [`pub_${source.id}`]: true }));
+    try {
+      const res = await apiFetch('/admin/questions/staged/publish-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceId: source.id }),
+      });
+      const data = await parseApiResponse<{ result: { publishedCount: number } }>(res);
+      setMessage({
+        text: `Successfully published ${data.result?.publishedCount || 0} questions to the bank under skill.`,
+        type: 'success',
+      });
+      loadSources();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Publish failed';
+      setMessage({ text: msg, type: 'error' });
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [`pub_${source.id}`]: false }));
     }
   };
 
@@ -556,18 +648,35 @@ export default function ContentSourcesTab() {
 
                     <td className="px-4 py-3.5 text-slate-500 text-[11px]">
                       <div>{source.lastSyncAt ? new Date(source.lastSyncAt).toLocaleDateString() : 'Never synced'}</div>
-                      <div className="text-[10px] text-slate-400">
-                        {source._count?.questions || 0} questions stored
+                      <div className="font-semibold text-slate-800">
+                        {source._count?.questions || 0} published
                       </div>
+                      {(source.stagedCount ?? 0) > 0 && (
+                        <div className="text-[10px] text-amber-600 font-medium">
+                          {source.stagedCount} staged for review
+                        </div>
+                      )}
                     </td>
 
                     <td className="px-4 py-3.5 text-right">
                       <div className="flex items-center justify-end space-x-1.5">
+                        {(source.stagedCount ?? 0) > 0 && (
+                          <button
+                            onClick={() => handlePublishAllSource(source)}
+                            disabled={actionLoading[`pub_${source.id}`]}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-semibold rounded-lg text-[11px] flex items-center space-x-1 transition disabled:opacity-50"
+                            title="Publish all staged items directly into the Question Bank"
+                          >
+                            <CheckCircle className={`w-3 h-3 ${actionLoading[`pub_${source.id}`] ? 'animate-spin' : ''}`} />
+                            <span>Publish ({source.stagedCount})</span>
+                          </button>
+                        )}
+
                         <button
                           onClick={() => handlePreview(source)}
                           disabled={actionLoading[`prev_${source.id}`]}
                           className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition"
-                          title="Preview Extracted Q&A"
+                          title="View Extracted Q&A"
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
@@ -749,36 +858,177 @@ export default function ContentSourcesTab() {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Associated Technologies</label>
-                <div className="max-h-28 overflow-y-auto border border-slate-200 rounded-xl p-2 grid grid-cols-2 gap-1 bg-slate-50/50">
-                  {technologies.map((tech) => {
-                    const isChecked = formData.selectedTechIds.includes(tech.id);
+              <div ref={techDropdownRef} className="relative">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-semibold text-slate-700">Associated Technologies</label>
+                  {formData.selectedTechIds.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, selectedTechIds: [] })}
+                      className="text-[10px] text-slate-400 hover:text-rose-600 transition"
+                    >
+                      Clear all ({formData.selectedTechIds.length})
+                    </button>
+                  )}
+                </div>
+
+                {/* Multi-Select Input Box with Selected Chips */}
+                <div
+                  onClick={() => setTechDropdownOpen(true)}
+                  className="min-h-10 p-1.5 bg-white border border-slate-200 rounded-xl focus-within:ring-2 focus-within:ring-indigo-500 focus-within:border-indigo-500 flex flex-wrap items-center gap-1.5 cursor-text transition"
+                >
+                  {formData.selectedTechIds.map((id) => {
+                    const tech = technologies.find((t) => t.id === id);
+                    if (!tech) return null;
                     return (
-                      <label key={tech.id} className="flex items-center space-x-1.5 cursor-pointer text-[11px]">
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setFormData({
-                                ...formData,
-                                selectedTechIds: [...formData.selectedTechIds, tech.id],
-                              });
-                            } else {
-                              setFormData({
-                                ...formData,
-                                selectedTechIds: formData.selectedTechIds.filter((id) => id !== tech.id),
-                              });
-                            }
+                      <span
+                        key={tech.id}
+                        className="inline-flex items-center space-x-1 pl-2.5 pr-1.5 py-1 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-medium group"
+                      >
+                        <span>{tech.canonicalName}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFormData((prev) => ({
+                              ...prev,
+                              selectedTechIds: prev.selectedTechIds.filter((tId) => tId !== tech.id),
+                            }));
                           }}
-                          className="rounded text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <span className="truncate">{tech.canonicalName}</span>
-                      </label>
+                          className="hover:bg-indigo-100 rounded-md p-0.5 text-indigo-400 hover:text-indigo-700 transition"
+                          title={`Remove ${tech.canonicalName}`}
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
                     );
                   })}
+
+                  {/* Inline Search Input */}
+                  <div className="flex-1 min-w-[140px] flex items-center space-x-1">
+                    <Search className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-1" />
+                    <input
+                      type="text"
+                      value={techSearch}
+                      onChange={(e) => {
+                        setTechSearch(e.target.value);
+                        setTechDropdownOpen(true);
+                      }}
+                      onFocus={() => setTechDropdownOpen(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const trimmed = techSearch.trim();
+                          if (!trimmed) return;
+                          const existing = technologies.find(
+                            (t) => t.canonicalName.toLowerCase() === trimmed.toLowerCase()
+                          );
+                          if (existing) {
+                            if (!formData.selectedTechIds.includes(existing.id)) {
+                              setFormData((prev) => ({
+                                ...prev,
+                                selectedTechIds: [...prev.selectedTechIds, existing.id],
+                              }));
+                            }
+                            setTechSearch('');
+                          } else {
+                            handleAddNewTech(trimmed);
+                          }
+                        }
+                      }}
+                      placeholder={
+                        formData.selectedTechIds.length === 0
+                          ? 'Search or type new technology...'
+                          : 'Add more...'
+                      }
+                      className="w-full text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden bg-transparent"
+                    />
+                  </div>
                 </div>
+
+                {/* Dropdown Overlay */}
+                {techDropdownOpen && (
+                  <div className="absolute left-0 right-0 z-40 mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-56 overflow-y-auto text-xs">
+                    {/* Add New Option */}
+                    {techSearch.trim() &&
+                      !technologies.some(
+                        (t) => t.canonicalName.toLowerCase() === techSearch.trim().toLowerCase()
+                      ) && (
+                        <div
+                          onClick={() => handleAddNewTech(techSearch.trim())}
+                          className="p-2.5 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 font-semibold cursor-pointer border-b border-indigo-100 flex items-center justify-between transition"
+                        >
+                          <span className="flex items-center space-x-1.5">
+                            <Plus className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Add &quot;{techSearch.trim()}&quot; as new technology</span>
+                          </span>
+                          {creatingTech ? (
+                            <RefreshCw className="w-3 h-3 animate-spin text-indigo-600" />
+                          ) : (
+                            <span className="text-[10px] text-indigo-500 bg-white px-1.5 py-0.5 rounded border border-indigo-200">
+                              Press Enter ↵
+                            </span>
+                          )}
+                        </div>
+                      )}
+
+                    {/* Filtered Technology List */}
+                    <div className="p-1">
+                      {filteredTechnologies.length === 0 && !techSearch.trim() ? (
+                        <div className="p-3 text-center text-slate-400">No technologies found.</div>
+                      ) : (
+                        filteredTechnologies.map((tech) => {
+                          const isSelected = formData.selectedTechIds.includes(tech.id);
+                          return (
+                            <div
+                              key={tech.id}
+                              onClick={() => {
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  selectedTechIds: isSelected
+                                    ? prev.selectedTechIds.filter((id) => id !== tech.id)
+                                    : [...prev.selectedTechIds, tech.id],
+                                }));
+                                setTechSearch('');
+                              }}
+                              className={`p-2 rounded-lg flex items-center justify-between cursor-pointer transition ${
+                                isSelected
+                                  ? 'bg-indigo-50/80 font-semibold text-indigo-900'
+                                  : 'hover:bg-slate-50 text-slate-700'
+                              }`}
+                            >
+                              <div className="flex items-center space-x-2">
+                                <span
+                                  className={`w-4 h-4 rounded flex items-center justify-center text-[10px] transition ${
+                                    isSelected ? 'bg-indigo-600 text-white' : 'border border-slate-300'
+                                  }`}
+                                >
+                                  {isSelected && <Check className="w-3 h-3" />}
+                                </span>
+                                <span>{tech.canonicalName}</span>
+                              </div>
+                              <span className="text-[10px] text-slate-400">{tech.category || 'General'}</span>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="p-2 border-t border-slate-100 bg-slate-50/70 flex items-center justify-between text-[11px] text-slate-500">
+                      <span>{formData.selectedTechIds.length} selected</span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTechDropdownOpen(false);
+                        }}
+                        className="text-indigo-600 hover:text-indigo-800 font-semibold"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -850,7 +1100,7 @@ export default function ContentSourcesTab() {
                   Preview Extracted Questions: {previewData.sourceName}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Found {previewData.questions.length} questions parsed using normalized rules.
+                  Found {previewData.totalQuestionsFound || previewData.questions.length} questions {previewData.isExistingData ? 'in database staging/published queue' : 'parsed from source'}.
                 </p>
               </div>
               <button
@@ -867,7 +1117,7 @@ export default function ContentSourcesTab() {
                   No questions could be extracted with the current configuration.
                 </div>
               ) : (
-                previewData.questions.slice(0, 15).map((q, idx) => (
+                previewData.questions.slice(0, 50).map((q, idx) => (
                   <div key={idx} className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1.5">
                     <div className="flex items-center justify-between text-[10px] text-slate-500 font-medium">
                       <span>Topic: {q.topic || 'General'}</span>
@@ -884,13 +1134,31 @@ export default function ContentSourcesTab() {
               )}
             </div>
 
-            <div className="pt-4 border-t border-slate-100 flex justify-end">
-              <button
-                onClick={() => setPreviewData(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl"
-              >
-                Close Preview
-              </button>
+            <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500">
+                Showing {Math.min(previewData.questions.length, 50)} of {previewData.totalQuestionsFound || previewData.questions.length} questions
+              </span>
+              <div className="flex items-center space-x-2">
+                {previewData.sourceId && (
+                  <button
+                    onClick={() => {
+                      const sid = previewData.sourceId!;
+                      setPreviewData(null);
+                      handlePublishAllSource({ id: sid } as any);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition shadow-xs"
+                  >
+                    <CheckCircle className="w-3.5 h-3.5" />
+                    <span>Publish All to Question Bank</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => setPreviewData(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-xl"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>
